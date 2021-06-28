@@ -20,6 +20,10 @@ library(sf)
 library(htmltools)
 library(shinyWidgets)
 library(rsconnect)
+library(shinydashboard)
+library(shinydashboardPlus)
+library(visNetwork)
+library(igraph)
 
 
 # ------------------------------- #
@@ -32,20 +36,26 @@ library(rsconnect)
 # ------------------------------- #
 options(scipen = 999)
 
+datalist <- readRDS("./data/shiny_spatial.rds")
 
-edges <- readRDS("./data/edges_4_shiny.rds")
-edges <- data.frame(group = c(edges$ego, edges$alter),
-                    lat = c(edges$centroid_lat.x, edges$centroid_lat.y),
-                    lon = c(edges$centroid_lon.x, edges$centroid_lon.y)
-)
+polygons <- datalist[1] |>
+  as.data.frame() |>
+  st_as_sf(crs = 4326, agr = "constant")
+
+nodes <- datalist[2] |>
+  as.data.frame() |>
+  mutate(across(orgtype, factor)) |>
+  st_as_sf(crs = 4326, agr = "constant")
 
 
-nodes <- readRDS("./data/nodes_4_shiny.rds")
-nodes$location <- as.factor(nodes$location)
-nodes$orgtype <- as.factor(nodes$orgtype)
-nodes= st_as_sf(nodes, coords = c("centroid_lon", "centroid_lat"), 
-                   crs = 4326, agr = "constant", remove = FALSE)
+edges <- datalist[3] |> 
+  as.data.frame()
 
+datalist2 <- readRDS("./data/shiny_network.rds")
+nodes2 <- datalist2[1] |>
+  as.data.frame()
+edges2 <- datalist2[2] |>
+  as.data.frame()
 
 # ------------------------------- #
 # ------------------------------- #
@@ -57,20 +67,31 @@ nodes= st_as_sf(nodes, coords = c("centroid_lon", "centroid_lat"),
 # ------------------------------- #
 
 
-ui <- bootstrapPage(
-  tags$style(type = "text/css", "html, body {width:100%;height:100%}"),
-  leafletOutput("map", width = "100%", height = "100%"),
-  absolutePanel(
-    top = "5%",
-    right = "5%",
-    selectInput(
-      "colorvar",
-      "Select Color Scheme",
-      choices = c("Physical Location",
-                  "Organization Type")
-    )
-    
-  )
+ui <- fluidPage(
+  titlePanel("SEKI Explorer"),
+  fluidRow(column(5,offset = 1,
+                  leafletOutput(
+                    "map",
+                    width = "700px",
+                    height = "700px"
+                  )),
+           column(5, offset = 1, 
+                  visNetworkOutput(
+                    "visnet",
+                    height = "700px"
+                  )
+                  ))
+  # absolutePanel(
+  #   top = "5%",
+  #   right = "5%",
+  #   selectInput(
+  #     "colorvar",
+  #     "Select Color Scheme",
+  #     choices = c("Physical Location",
+  #                 "Organization Type")
+  #   )
+  #   
+  # )
 )
 
 
@@ -86,26 +107,19 @@ ui <- bootstrapPage(
 
 
 
-server <- shinyServer(function(input, output, session) {
+server <- function(input, output, session) {
   
   #Palette Function 
   pal <- reactive({ 
     
-    if (input$colorvar %in% "Physical Location"){ 
       
       colorFactor(
-        palette = c('red', 'blue'),
-        domain = nodes$location
-      )
-    }
-    
-    else {
-      colorFactor(
-        palette = c('red', 'blue', 'green', 'yellow', 'purple','orange'),
+        palette = c('red', 'green', 'yellow'),
         na.color = "#808080",
         domain = nodes$orgtype
       )
-    }
+
+    
   })
   
   
@@ -125,36 +139,11 @@ server <- shinyServer(function(input, output, session) {
   observe({
     
     pal <- pal()
-    
-    if (input$colorvar %in% "Physical Location"){ 
-    leafletProxy("map") |> 
-      clearControls() |> 
-      clearMarkers() |> 
-      addCircleMarkers(
-        data = nodes,
-        lng =  ~ nodes$centroid_lon,
-        lat =  ~ nodes$centroid_lat,
-        fillColor = ~pal(nodes$location),
-        color = ~pal(nodes$location),
-        radius = nodes$value,
-        fillOpacity = 0.7,
-        label = nodes$id
-      ) |> 
-        addPolylines(data = edges,
-                     lng = ~lon,
-                     lat = ~lat,
-                     group = ~group,
-                     weight = 1,
-                     opacity = 0.5) |> 
-        addLegend(data = nodes,
-                  "bottomright",
-                  pal = pal,
-                  values = ~nodes$location,
-                  title = "")
-    } else {
+  
       leafletProxy("map") |> 
         clearControls() |> 
         clearMarkers() |> 
+        addPolygons(data = polygons, label = polygons$Name) |> 
         addCircleMarkers(
           data = nodes,
           lng =  ~ nodes$centroid_lon,
@@ -177,11 +166,44 @@ server <- shinyServer(function(input, output, session) {
                   pal = pal,
                   values = ~nodes$orgtype,
                   title = "")
-      }
+    
     
   })
   
-})
+  
+  #Visnetwork
+  output$visnet <- renderVisNetwork({
+    visNetwork(
+      nodes2,
+      edges2,
+      main = "SEKI PACE Network",
+      width = "100%",
+      height = "700px"
+    ) |>
+       visEdges(
+         smooth = T,
+         arrows = list(
+           to = list(enabled = TRUE, scaleFactor = .5),
+           width = 3
+         ),
+         color = list(highlight = "black")
+       ) |> 
+       visNodes(color = list(
+         background = "white",
+         border = "black",
+         highlight = list(background = "#A9A9A9", border = "black"),
+          hover = list(background = "#A9A9A9", border = "black")
+       )) |>
+       visIgraphLayout(
+         smooth = FALSE,
+         physics = FALSE,
+         layout = "layout_with_fr",
+         randomSeed = 27
+       ) 
+      
+  })
+  
+}
 
 
 
